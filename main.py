@@ -90,7 +90,7 @@ def collect_python_files(directory: str) -> List[str]:
     log_success(f"Found {total_files} Python files")
     return python_files
 
-def generate_documentation(analysis_results: List[Dict], model: str = "llama2") -> Dict:
+def generate_documentation(analysis_results: List[Dict], model: str = "qwen2.5:14b-instruct-q4_K_M") -> Dict:
     """Generates documentation using LLM"""
     documentation = {
         "project_overview": "",
