@@ -1,264 +1,256 @@
+import sys
 import os
-import ast
-import json
-import markdown
-import time
-from typing import List, Dict
-from openai import OpenAI
-import colorama
-from tqdm import tqdm
-
-# Initialize colorama for terminal colors
-colorama.init(autoreset=True)
-
-# Ollama client configuration
-client = OpenAI(
-    base_url='http://localhost:11434/v1',
-    api_key='ollama'
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QLabel, QLineEdit, QPushButton, QFileDialog, QCheckBox, 
+    QTextEdit, QSplitter, QTreeView
 )
-
-def log_info(message):
-    """Prints informative messages in blue"""
-    print(f"{colorama.Fore.CYAN}[INFO] {message}{colorama.Fore.RESET}")
-
-def log_warning(message):
-    """Prints warning messages in yellow"""
-    print(f"{colorama.Fore.YELLOW}[WARN] {message}{colorama.Fore.RESET}")
-
-def log_error(message):
-    """Prints error messages in red"""
-    print(f"{colorama.Fore.RED}[ERROR] {message}{colorama.Fore.RESET}")
-
-def log_success(message):
-    """Prints success messages in green"""
-    print(f"{colorama.Fore.GREEN}[SUCCESS] {message}{colorama.Fore.RESET}")
-
-def analyze_file(file_path: str) -> Dict:
-    """Analyzes an individual Python file"""
-    try:
-        log_info(f"Analyzing file: {file_path}")
-        start_time = time.time()
+from PyQt5.QtCore import Qt, QDir
+from PyQt5.QtGui import QStandardItemModel, QStandardItem
+from ollama import chat
+from ollama import ChatResponse
+from extract_embedding import SemanticSearchChroma
+# Importações do seu script original
+from main_functions import (
+    collect_python_files, 
+    generate_documentation, 
+    analyze_file, 
+    save_documentation,
+    log_info,
+    log_error
+)
+searcher = SemanticSearchChroma()
+class DocumentationApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Automated Project Documentation")
+        self.setGeometry(100, 100, 1200, 800)
+        self.localizacao_da_pasta = None
+        # Main central widget
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QHBoxLayout()
+        main_widget.setLayout(main_layout)
         
-        with open(file_path, "r", encoding="utf-8") as f:
-            code = f.read()
-            tree = ast.parse(code)
-            file_info = {
-                "file": file_path,
-                "classes": [],
-                "functions": [],
-                "imports": [],
-                "docstrings": [],
-                "complexity": 0
-            }
+        # Left Sidebar
+        sidebar = QWidget()
+        sidebar_layout = QVBoxLayout()
+        sidebar.setLayout(sidebar_layout)
+        sidebar.setMaximumWidth(300)
         
-        # Detailed AST analysis
-        for node in ast.iter_child_nodes(tree):
-            if isinstance(node, ast.ClassDef):
-                file_info["classes"].append({
-                    "name": node.name,
-                    "methods": [method.name for method in node.body if isinstance(method, ast.FunctionDef)]
-                })
-            elif isinstance(node, ast.FunctionDef):
-                file_info["functions"].append({
-                    "name": node.name,
-                    "args": [arg.arg for arg in node.args.args],
-                    "complexity": len(list(ast.walk(node)))
-                })
-            elif isinstance(node, ast.Import) or isinstance(node, ast.ImportFrom):
-                file_info["imports"].append(ast.unparse(node))
-            elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Str):
-                file_info["docstrings"].append(node.value.s)
+        # Project Directory Selection
+        dir_label = QLabel("Select Project Directory:")
+        self.dir_input = QLineEdit()
+        browse_button = QPushButton("Browse")
+        browse_button.clicked.connect(self.select_directory)
         
-        end_time = time.time()
-        log_success(f"File analysis completed in {end_time - start_time:.2f} seconds")
-        return file_info
-    except Exception as e:
-        log_error(f"Error analyzing {file_path}: {e}")
-        return {}
-
-def collect_python_files(directory: str) -> List[str]:
-    """Collects all Python files in a directory"""
-    log_info(f"Collecting Python files in: {directory}")
-    python_files = []
-    total_files = 0
-    for root, _, files in os.walk(directory):
-        for file in files:
-            if file.endswith(".py"):
-                python_files.append(os.path.join(root, file))
-                total_files += 1
-    
-    log_success(f"Found {total_files} Python files")
-    return python_files
-
-def generate_documentation(analysis_results: List[Dict], model: str = "qwen2.5:14b-instruct-q4_K_M") -> Dict:
-    """Generates documentation using LLM"""
-    documentation = {
-        "project_overview": "",
-        "file_summaries": {},
-        "module_interactions": ""
-    }
-    
-    # Project overview analysis
-    log_info("Generating project overview")
-    overview_prompt = "Analyze this project structure and provide a comprehensive overview:\n\n"
-    for result in analysis_results:
-        overview_prompt += f"File: {result['file']}\n"
-        overview_prompt += f"Classes: {', '.join([cls['name'] for cls in result['classes']])}\n"
-        overview_prompt += f"Functions: {', '.join([func['name'] for func in result['functions']])}\n\n"
-    
-    overview_prompt += "Describe the project's purpose, main components, and how they interact."
-    
-    try:
-        overview_completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are an expert in machine learning project analysis."},
-                {"role": "user", "content": overview_prompt}
-            ]
+        self.partial_report_checkbox = QCheckBox("Partial Report")
+        
+        # Partial Report Criteria
+        self.partial_criteria_input = QLineEdit()
+        self.partial_criteria_input.setPlaceholderText("Enter partial report criteria")
+        self.partial_criteria_input.setEnabled(False)
+        
+        # Toggle partial report input
+        self.partial_report_checkbox.toggled.connect(
+            self.partial_criteria_input.setEnabled
         )
-        documentation["project_overview"] = overview_completion.choices[0].message.content
-        log_success("Project overview generated")
-    except Exception as e:
-        log_error(f"Error generating project overview: {e}")
+        
+        # Generate Report Button
+        generate_button = QPushButton("Generate Documentation")
+        generate_button.clicked.connect(self.generate_documentation)
+        
+        # Add widgets to sidebar
+        sidebar_layout.addWidget(dir_label)
+        sidebar_layout.addWidget(self.dir_input)
+        sidebar_layout.addWidget(browse_button)
+        sidebar_layout.addWidget(self.partial_report_checkbox)
+        sidebar_layout.addWidget(self.partial_criteria_input)
+        sidebar_layout.addWidget(generate_button)
+        generate_individual_button = QPushButton("Generate Individual Reports")
+        generate_individual_button.clicked.connect(self.generate_individual_reports)
+        sidebar_layout.addWidget(generate_individual_button)
+        # Crie o novo botão
+        self.generate_embedding_button = QPushButton("Gerar embeddings")
+        
+        # self.generate_embedding_button.clicked.connect(searcher.add_documents(self.generate_embedding))
+        self.generate_embedding_button.setEnabled(False)  # Desabilite o botão por padrão
+        sidebar_layout.addWidget(self.generate_embedding_button) 
+        sidebar_layout.addStretch(1)
+        
+        # Main Content Area
+        content_area = QWidget()
+        content_layout = QVBoxLayout()
+        content_area.setLayout(content_layout)
+        
+        # Results Display
+        self.results_text = QTextEdit()
+        self.results_text.setReadOnly(True)
+        
+        # File Tree View
+        self.file_tree = QTreeView()
+        
+        # Add widgets to content area
+        content_layout.addWidget(QLabel("Documentation Results:"))
+        content_layout.addWidget(self.results_text)
+        content_layout.addWidget(self.file_tree)
+        
+        # Add components to main layout
+        main_layout.addWidget(sidebar)
+        main_layout.addWidget(content_area)
+    def enable_new_button(self):
+        self.generate_embedding_button.setEnabled(True)
+        self.generate_embedding_button.clicked.connect(searcher.add_documents(self.localizacao_da_pasta))
+    def generate_embedding(self):
+            localizacao_da_pasta = self.localizacao_da_pasta  # obtém a localização da pasta
+            if localizacao_da_pasta is not None:
+                searcher.add_documents(localizacao_da_pasta)
+            else:
+                print("Localização da pasta não definida")     
+    def select_directory(self):
+        """Open directory selection dialog"""
+        dir_path = QFileDialog.getExistingDirectory(
+            self, 
+            "Select Project Directory", 
+            os.path.expanduser('~')
+        )
+        
+        if dir_path:
+            self.dir_input.setText(dir_path)
+            self.populate_file_tree(dir_path)
     
-    # Individual file summaries
-    log_info("Generating file summaries")
-    for result in tqdm(analysis_results, desc="Processing files"):
+    def populate_file_tree(self, directory):
+        """Populate file tree with project structure"""
+        model = QStandardItemModel()
+        root_item = model.invisibleRootItem()
+        
         try:
-            file_summary_prompt = f"Analyze the file {result['file']} and explain its purpose and key components:\n"
-            file_summary_prompt += f"Classes: {', '.join([cls['name'] for cls in result['classes']])}\n"
-            file_summary_prompt += f"Functions: {', '.join([func['name'] for func in result['functions']])}\n"
+            log_info(f"Populating file tree for directory: {directory}")
+            for root, dirs, files in os.walk(directory):
+                dir_item = QStandardItem(os.path.basename(root))
+                for file in files:
+                    file_item = QStandardItem(file)
+                    dir_item.appendRow(file_item)
+                root_item.appendRow(dir_item)
             
-            file_summary_completion = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "You are an expert in code analysis."},
-                    {"role": "user", "content": file_summary_prompt}
-                ]
-            )
-            
-            documentation["file_summaries"][result['file']] = {
-                "summary": file_summary_completion.choices[0].message.content,
-                "details": result
-            }
+            self.file_tree.setModel(model)
         except Exception as e:
-            log_warning(f"Error generating summary for {result['file']}: {e}")
+            log_error(f"Error populating file tree: {e}")
     
-    # Module interactions
-    log_info("Generating module interaction description")
-    try:
-        interaction_prompt = "Describe how the modules and components in this project interact with each other."
-        interaction_completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are an expert in software architecture."},
-                {"role": "user", "content": interaction_prompt}
-            ]
-        )
-        documentation["module_interactions"] = interaction_completion.choices[0].message.content
-        log_success("Module interaction description generated")
-    except Exception as e:
-        log_error(f"Error generating module interactions: {e}")
-    
-    return documentation
+    def generate_documentation(self):
+        """Generate documentation based on user selections"""
+        project_dir = self.dir_input.text()
+        
+        if not project_dir:
+            self.results_text.setText("Please select a project directory")
+            return
+        
+        try:
+            # Collect Python files
+            python_files = collect_python_files(project_dir)
+            
+            # Analyze files
+            results = []
+            for file in python_files:
+                file_result = analyze_file(file)
+                if file_result:
+                    results.append(file_result)
+            
+            # Generate documentation
+            documentation = generate_documentation(results)
+            
+            # Save documentation
+            save_documentation(documentation)
+            
+            # Display results
+            self.display_documentation_results(documentation)
+        
+        except Exception as e:
+            log_error(f"Error generating documentation: {e}")
+            self.results_text.setText(f"An error occurred: {str(e)}")
 
-def save_documentation(documentation: Dict, output_dir: str = "project_docs"):
-    """Saves documentation in multiple formats"""
-    log_info(f"Saving documentation to directory: {output_dir}")
     
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Save JSON
-    json_path = os.path.join(output_dir, "project_documentation.json")
-    try:
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(documentation, f, indent=2)
-        log_success(f"JSON documentation saved to: {json_path}")
-    except Exception as e:
-        log_error(f"Error saving JSON: {e}")
-    
-    # Generate Markdown
-    markdown_content = f"""# Project Documentation
 
-## Project Overview
+    def generate_file_report(self, file, file_result):
+        # Crie um prompt para a LLM
+        prompt = f"""
+        Extraia as informações mais relevantes do arquivo {file} e gere um texto conciso e informativo que descreva seu conteúdo. O texto gerado deve ser otimizado para busca semântica, utilizando embeddings.
+
+        Exemplo de saída desejada:
+
+        Tópicos principais: mudanças climáticas, agricultura, impacto ambiental, segurança alimentar, análise de dados, modelagem estatística.
+        Conteúdo: Este estudo científico investiga os efeitos das mudanças climáticas na produção agrícola global. Através da análise de dados históricos e projeções futuras, o documento demonstra como eventos climáticos extremos, como secas e inundações, afetam a produtividade agrícola e a disponibilidade de alimentos. Os autores propõem medidas de adaptação e mitigação para garantir a segurança alimentar em um cenário de aquecimento global.
+
+        """
+
+        # Chame a LLM
+        response: ChatResponse = chat(model='qwen2.5:14b-instruct-q4_K_M', messages=[
+            {
+                'role':'system',
+                'content': 'You are an expert in code analysis.'
+            },
+            {
+                'role': 'user',
+                'content': prompt
+            }
+        ])
+        
+        # Retorne o relatório gerado pela LLM
+        return response.message.content
+
+    def generate_individual_reports(self):
+        project_dir = self.dir_input.text()
+        if not project_dir:
+            self.results_text.setText("Por favor, selecione um diretório de projeto")
+            return
+        
+        try:
+            # Collect Python files
+            python_files = collect_python_files(project_dir)
+            
+            # Crie uma pasta separada para armazenar os relatórios individuais
+            reports_dir = os.path.join(project_dir, "_relatorios")
+            self.localizacao_da_pasta = reports_dir
+            os.makedirs(reports_dir, exist_ok=True)
+            
+            # Gere relatórios individuais para cada arquivo
+            for file in python_files:
+                file_result = analyze_file(file)
+                if file_result:
+                    # Gere um relatório para o arquivo
+                    report = self.generate_file_report(file, file_result)
+                    # Salve o relatório em uma pasta separada
+                    report_file = os.path.join(reports_dir, f"{os.path.basename(file)}.txt")
+                    with open(report_file, "w") as f:
+                        f.write(report)
+            
+            self.results_text.setText("Relatórios individuais gerados com sucesso!")
+            self.enable_new_button()
+        except Exception as e:
+            log_error(f"Erro ao gerar relatórios individuais: {e}")
+            self.results_text.setText(f"Ocorreu um erro: {str(e)}")
+     
+    def display_documentation_results(self, documentation):
+        """Display documentation results in the text area"""
+        results_text = f"""
+Project Overview:
 {documentation['project_overview']}
 
-## Module Interactions
+Module Interactions:
 {documentation['module_interactions']}
 
-## File Summaries
+File Summaries:
 """
-    
-    for file_path, file_info in documentation['file_summaries'].items():
-        markdown_content += f"""
-### {file_path}
-{file_info['summary']}
+        for file_path, file_info in documentation['file_summaries'].items():
+            results_text += f"\n{file_path}:\n{file_info['summary']}\n"
+        
+        self.results_text.setText(results_text)
 
-#### Detailed Components
-- **Classes**: {[cls['name'] for cls in file_info['details']['classes']]}
-- **Functions**: {[func['name'] for func in file_info['details']['functions']]}
-"""
-    
-    # Save Markdown
-    md_path = os.path.join(output_dir, "project_documentation.md")
-    try:
-        with open(md_path, "w", encoding="utf-8") as f:
-            f.write(markdown_content)
-        log_success(f"Markdown documentation saved to: {md_path}")
-    except Exception as e:
-        log_error(f"Error saving Markdown: {e}")
-    
-    # Convert to HTML
-    try:
-        html_content = markdown.markdown(markdown_content)
-        html_path = os.path.join(output_dir, "project_documentation.html")
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Project Documentation</title>
-                <style>
-                    body {{ font-family: Arial, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; }}
-                </style>
-            </head>
-            <body>
-                {html_content}
-            </body>
-            </html>
-            """)
-        log_success(f"HTML documentation saved to: {html_path}")
-    except Exception as e:
-        log_error(f"Error saving HTML: {e}")
+def main():
+    app = QApplication(sys.argv)
+    main_window = DocumentationApp()
+    main_window.show()
+    sys.exit(app.exec_())
 
 if __name__ == "__main__":
-    # Start of execution
-    start_total_time = time.time()
-    log_info("Starting project analysis")
-    
-    # Project directory
-    project_dir = "./zou-group-textgrad"
-    
-    # File collection
-    python_files = collect_python_files(project_dir)
-    
-    # File analysis
-    log_info("Starting detailed file analysis")
-    results = []
-    for file in tqdm(python_files, desc="Analyzing files"):
-        file_result = analyze_file(file)
-        if file_result:
-            results.append(file_result)
-    
-    # Documentation generation
-    log_info("Generating documentation with AI assistant")
-    documentation = generate_documentation(results)
-    
-    # Saving documentation
-    save_documentation(documentation)
-    
-    # Total execution time
-    end_total_time = time.time()
-    log_success(f"Analysis completed in {end_total_time - start_total_time:.2f} seconds")
-    print("\nDocumentation generated successfully in 'project_docs' directory!")
+    main()
