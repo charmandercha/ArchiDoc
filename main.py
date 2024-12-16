@@ -126,6 +126,7 @@ class DocumentationApp(QMainWindow):
             self.dir_input.setText(dir_path)
             self.populate_file_tree(dir_path)
 
+    
     def populate_file_tree(self, directory):
         """Populate file tree with project structure"""
         model = QStandardItemModel()
@@ -137,43 +138,47 @@ class DocumentationApp(QMainWindow):
                 # Criar um item para o diretório atual
                 dir_item = QStandardItem(os.path.basename(root))
                 dir_item.setData(root, Qt.UserRole + 1)  # Armazena o caminho completo do diretório
+                dir_item.setSelectable(False)  # Impede seleção de diretórios
                 
                 for file in files:
-                    file_item = QStandardItem(file)
-                    # Armazena o caminho completo do arquivo
-                    full_file_path = os.path.join(root, file)
-                    file_item.setData(full_file_path, Qt.UserRole + 1)
-                    dir_item.appendRow(file_item)
+                    # Adiciona apenas arquivos Python
+                    if file.endswith('.py'):
+                        file_item = QStandardItem(file)
+                        # Armazena o caminho completo do arquivo
+                        full_file_path = os.path.join(root, file)
+                        file_item.setData(full_file_path, Qt.UserRole + 1)
+                        dir_item.appendRow(file_item)
                 
-                root_item.appendRow(dir_item)
+                # Adiciona apenas diretórios que contêm arquivos Python
+                if dir_item.rowCount() > 0:
+                    root_item.appendRow(dir_item)
             
             self.file_tree.setModel(model)
-            self.file_tree.selectionModel().selectionChanged.connect(self.generate_individual_report)
+            self.file_tree.doubleClicked.connect(self.generate_individual_report)
         except Exception as e:
             log_error(f"Error populating file tree: {e}")
 
-    def generate_individual_report(self, selected, deselected):
-        """Generate individual report for a selected file"""
-        selected_indexes = self.file_tree.selectedIndexes()
-        if selected_indexes:
-            # Recupera o item selecionado
-            selected_item = selected_indexes[0].model().itemFromIndex(selected_indexes[0])
+    def generate_individual_report(self, index):
+        """Generate individual report for a double-clicked file"""
+        # Recupera o item selecionado
+        selected_item = index.model().itemFromIndex(index)
+        
+        # Recupera o caminho completo do arquivo
+        file_path = selected_item.data(Qt.UserRole + 1)
+        
+        # Verifica se é um arquivo (não um diretório)
+        if os.path.isfile(file_path):
+            print(f"Arquivo selecionado: {file_path}")
             
-            # Recupera o caminho completo do arquivo
-            file_path = selected_item.data(Qt.UserRole + 1)
-            
-            # Verifica se é um arquivo (não um diretório)
-            if os.path.isfile(file_path):
-                print(f"Arquivo selecionado: {file_path}")
-                
-                try:
-                    file_result = analyze_file(file_path)
-                    if file_result:
-                        report = self.generate_file_report(file_path, file_result)
-                        self.results_text.setText(report)
-                except Exception as e:
-                    log_error(f"Erro ao gerar relatório para {file_path}: {e}")
-                    self.results_text.setText(f"Erro ao analisar arquivo: {e}")
+            try:
+                file_result = analyze_file(file_path)
+                if file_result:
+                    report = self.generate_file_report(file_path, file_result)
+                    self.results_text.setText(report)
+            except Exception as e:
+                log_error(f"Erro ao gerar relatório para {file_path}: {e}")
+                self.results_text.setText(f"Erro ao analisar arquivo: {e}")
+
     def generate_file_report(self, file, file_result):
         # Create a prompt for the LLM
         prompt = f"""
