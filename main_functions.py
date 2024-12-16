@@ -296,6 +296,7 @@ if __name__ == "__main__":
     log_info("Starting detailed file analysis")
     results = []
     for file in tqdm(python_files, desc="Analyzing files"):
+        print(file)
         file_result = analyze_file(file)
         if file_result:
             results.append(file_result)
